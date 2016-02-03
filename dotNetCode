@@ -1,0 +1,345 @@
+using System;
+using System.Collections.Generic;
+using System.Data;
+using System.Data.SqlClient;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+using Microsoft.VisualBasic;
+using System.IO;
+
+namespace AddressWithNoStreet
+{
+    class Program
+    {
+        static void Main(string[] args)
+        {
+            //variables used throughout this method
+            //data access and data reader for getting the max addresses objectid value
+            clsDatabaseAccess.clsDatabaseAccess DB = new clsDatabaseAccess.clsDatabaseAccess();
+            SqlDataReader sqlDR;
+            //data access and data reader for getting the next batch of 250k addresses from DatabaseNameHere
+            clsDatabaseAccess.clsDatabaseAccess DB1 = new clsDatabaseAccess.clsDatabaseAccess();
+            SqlDataReader sqlDR1;
+            //data access and data reader for getting the nearest street to the current address (street with the same street name)
+            clsDatabaseAccess.clsDatabaseAccess DB2 = new clsDatabaseAccess.clsDatabaseAccess();
+            SqlDataReader sqlDR2;
+
+
+            try
+            {
+                string strMonthDay = string.Concat(DateTime.Now.Month, DateTime.Now.Day);
+                //setup a file stream and a stream writer to write out the addresses that do not have a nearby street or a street out of range
+                string path = "\\\\REDFS\\DFSROOT\\GIS\\Data\\AddressesWithNoNearbyStreets\\AddressNoStreets" + strMonthDay + ".txt";
+                FileStream fileStream = new FileStream(path, FileMode.Create);
+                StreamWriter streamWriter = new StreamWriter(fileStream);
+                streamWriter.WriteLine("UniqueID" + "," + "X" + "," + "Y" + "," + "ADDRES_OID" + "," + "REASON" + "," + "VALUE");
+
+
+                //connect to the DatabaseNameHere database to get the max objectid from the address table
+                Microsoft.VisualBasic.Collection colIn = new Microsoft.VisualBasic.Collection(); //i had to use this because a clsDatabaseAccess argument requires a visual basic collection (until they write a c# one, i guess we will do it this way) 
+
+                DB.ConnectDatabase("DatabaseNameHere");
+                //colIn.Clear();
+                DB1.ConnectDatabase("DatabaseNameHere");
+                //pass objectid and street name into DatabaseNameHere query to check the distance of the closest street with same name
+                DB2.ConnectDatabase("DatabaseNameHere");
+
+                //query the gisaddresses table, based on query in Databasename QUERY table
+                sqlDR = DB.GetData("GIS_GetMaxOIDAddress", clsDatabaseAccess.clsDatabaseAccess.Read, colIn) as SqlDataReader;
+
+                //advance to the first record
+                sqlDR.Read();
+
+                //create variable to hold the max gisaddresses objectid
+                Int32 intMaxOID;
+
+                //get max oid as variable
+                if (sqlDR.HasRows)
+                {
+                    intMaxOID = sqlDR.GetInt32(sqlDR.GetOrdinal("objectid"));
+                }
+                else //could not find table or data - error
+                {
+                    Console.WriteLine("The GIS_GetMaxOIDAddress query returned null values.");
+                    return;
+                }
+
+                //close the DatabaseNameHere connection used to get the max oid from gisaddresses
+                sqlDR.Close();
+                sqlDR = null;
+
+
+
+         
+
+                //connect to the DatabaseNameHere database to get a batch of gisaddresses to loop through (get a batch of 250k at a time)
+                //you could get all addresses but i was thinking it might consume too many resources and memory on the server, so do 250k at a time
+                Microsoft.VisualBasic.Collection colIn1 = new Microsoft.VisualBasic.Collection(); //i had to use this because a clsDatabaseAccess argument requires a visual basic collection (until they write a c# one, i guess we will do it this way) 
+                //DB1.ConnectDatabase("DatabaseNameHere");
+                
+                //setup batch variables
+                //this is the total number of addresses you want to be returned for each batch query to DatabaseNameHere
+                Int32 intBatch;
+                intBatch = 200000;
+
+                //this is the total number of recordsets (batch queries) (plus one, just to be safe) that will be eventually returned - in order to get all addresses in the table
+                Int32 intTotalRecordSets;
+                intTotalRecordSets = intMaxOID / intBatch + 1;
+                //intTotalRecordSets = 1; //for debuging
+                //Console.WriteLine(intTotalRecordSets.ToString());
+
+                //create a uniqueID for each record that get's written out
+                int z = 0;
+
+                //create a loop for each DatabaseNameHere request for a batch of addresses (if each batch returned 1 million addresses and there were 2 million addresses, this loop would only loop 2 times with two requests to DatabaseNameHere) 
+                for (int i = 0; i < intTotalRecordSets; i++)
+                {
+                    Console.WriteLine("Beginning address batch " + i + " of " + intTotalRecordSets + " at " + DateTime.Now);
+   
+                    colIn1.Clear();
+                    //pass into the query the number of how many address records you want returned for each batch (example: "250000" could return up to 250k records)
+                    colIn1.Add(intBatch);
+                    //pass into the query what resultset you want (example: a value of "1" would return oids that are between 250,000 - 500,000)
+                    colIn1.Add(i); //the variable "i" holds the current record set (batch)
+
+                    //query the gisaddresses table, based on query in Databasename QUERY table
+                    sqlDR1 = DB1.GetData("GIS_GetBatchOfAddresses", clsDatabaseAccess.clsDatabaseAccess.Read, colIn1) as SqlDataReader;
+
+
+                    //loop through the records (addresses in this batch) - if there are rows
+                    if (sqlDR1.HasRows)
+                    {
+                        //pass objectid and street name into DatabaseNameHere query to check the distance of the closest street with same name
+                        //DB2.ConnectDatabase("DatabaseNameHere");
+
+                        while (sqlDR1.Read())
+                        {
+
+                            Microsoft.VisualBasic.Collection colIn2 = new Microsoft.VisualBasic.Collection(); //i had to use this because a clsDatabaseAccess argument requires a visual basic collection (until they write a c# one, i guess we will do it this way) 
+
+                            colIn2.Clear();
+                            colIn2.Add(sqlDR1["OBJECTID"]);
+                            colIn2.Add(sqlDR1["STNAME"]);
+                            colIn2.Add(sqlDR1["STDIR"]);
+                            colIn2.Add(sqlDR1["STTYPE"]);
+                            //Console.WriteLine(sqlDR1["OBJECTID"]);
+                            //Console.WriteLine(sqlDR1["STNAME"]);
+
+                            //query the gisstreets table, based on query in Databasename QUERY table
+                            sqlDR2 = DB2.GetData("GIS_GetNearestStreet", clsDatabaseAccess.clsDatabaseAccess.Read, colIn2) as SqlDataReader;
+
+
+                            //check how many records were returned from the query of closest street (i return the "top(1)with ties" - so if there are more than one, that means there were streets with the same distance, aka: a street segment overlap)
+                            int intRecCount = 0;
+                            Boolean bool1stRecordNotInRange = false;
+                            Boolean bool2ndRecordNotInRange = false;
+                            int intLowNum = 100000;
+                            int intHighNum = 0;
+                            int intADD1_L = 0;
+                            int intADD1_R = 0;
+                            int intADD2_L = 0;
+                            int intADD2_R = 0;
+
+
+                            //check if there are rows (if there's a street with the same stname as the address point)
+                            if (sqlDR2.HasRows)
+                            {
+                                while (sqlDR2.Read())
+                                {
+                                    //add to the record counter
+                                    intRecCount = intRecCount + 1;
+
+                                    //check if it's the first record in the record set
+                                    if (intRecCount == 1)
+                                    {
+                                        //check if the nearest streets is greater than 400 feet away from the address
+                                        if (Math.Round(sqlDR2.GetDouble(sqlDR2.GetOrdinal("DISTANCE")), 0) >= Convert.ToInt32(args[0]))
+                                        {
+                                            z = z + 1;
+                                            streamWriter.WriteLine(z + "," + sqlDR1["X"] + "," + sqlDR1["Y"] + "," + sqlDR1["OBJECTID"] + "," + "DISTANCE" + "," + Math.Round(sqlDR2.GetDouble(sqlDR2.GetOrdinal("DISTANCE")), 0));
+                                        }
+
+                                        //check if the house number is within the street segment's range
+                                        intADD1_L = 0;
+                                        intADD1_R = 0;
+                                        intADD2_L = 0;
+                                        intADD2_R = 0;
+                                        intADD1_L = Convert.ToInt32(sqlDR2["ADD1_L"]);
+                                        intADD1_R = Convert.ToInt32(sqlDR2["ADD1_R"]);
+                                        intADD2_L = Convert.ToInt32(sqlDR2["ADD2_L"]);
+                                        intADD2_R = Convert.ToInt32(sqlDR2["ADD2_R"]);
+
+                                        //create an array with the street range values
+                                        int[] intArrayAllNumbers = new int[] { intADD1_L, intADD1_R, intADD2_L, intADD2_R };
+
+                                        //loop through the array and get the high and the low values of the range
+                                        foreach (int y in intArrayAllNumbers)
+                                        {
+                                            if (y <= intLowNum)
+                                            {
+                                                intLowNum = y;
+                                            }
+                                            if (y >= intHighNum)
+                                            {
+                                                intHighNum = y;
+                                            }
+                                        }
+
+                                        //check if the house number is within the street's address range
+                                        if (!(Convert.ToInt32(sqlDR1["HSENO"]) >= intLowNum && Convert.ToInt32(sqlDR1["HSENO"]) <= intHighNum))
+                                        {
+                                            z = z + 1;
+
+                                            //indicate the fisrt record is not in range
+                                            bool1stRecordNotInRange = true;
+                                            
+                                            //I now handle this after all records have been looped through (see below...)
+                                            //streamWriter.WriteLine(z + "," + sqlDR1["X"] + "," + sqlDR1["Y"] + "," + sqlDR1["OBJECTID"] + "," + "RANGE" + "," + intLowNum + "-" + intHighNum);
+                                        }
+
+                                    }
+                                    //there's more than one record in the record set (there's a distance tie, aka: street overlap)
+                                    else
+                                    {
+                                        //check if the house number is within the street segment's range
+                                        intADD1_L = 0;
+                                        intADD1_R = 0;
+                                        intADD2_L = 0;
+                                        intADD2_R = 0;
+                                        intADD1_L = Convert.ToInt32(sqlDR2["ADD1_L"]);
+                                        intADD1_R = Convert.ToInt32(sqlDR2["ADD1_R"]);
+                                        intADD2_L = Convert.ToInt32(sqlDR2["ADD2_L"]);
+                                        intADD2_R = Convert.ToInt32(sqlDR2["ADD2_R"]);
+
+                                        //create an array with the street range values
+                                        int[] intArrayAllNumbers = new int[] { intADD1_L, intADD1_R, intADD2_L, intADD2_R };
+
+                                        //loop through the array and get the high and the low values of the range
+                                        foreach (int y in intArrayAllNumbers)
+                                        {
+                                            if (y <= intLowNum)
+                                            {
+                                                intLowNum = y;
+                                            }
+                                            if (y >= intHighNum)
+                                            {
+                                                intHighNum = y;
+                                            }
+                                        }
+
+                                        //check if the house number is within the street's address range
+                                        //if (!(Convert.ToInt32(sqlDR1["HSENO"]) >= intLowNum && Convert.ToInt32(sqlDR1["HSENO"]) <= intHighNum))
+                                        //{
+                                            //z = z + 1;
+
+                                            //indicate the second record is not in range
+                                            //bool2ndRecordNotInRange = true;
+
+                                            //I now handle this after all records have been looped through (see below...)
+                                            //streamWriter.WriteLine(z + "," + sqlDR1["X"] + "," + sqlDR1["Y"] + "," + sqlDR1["OBJECTID"] + "," + "RANGE" + "," + intLowNum + "-" + intHighNum);
+                                        //}
+                                    }
+                                } //end of while read
+
+
+
+
+                                //now that all records have been looped through, write out lines, if needed
+                                //there was only one record returned
+                                if (intRecCount == 1 && bool1stRecordNotInRange == true)
+                                {
+                                    streamWriter.WriteLine(z + "," + sqlDR1["X"] + "," + sqlDR1["Y"] + "," + sqlDR1["OBJECTID"] + "," + "RANGE" + "," + intLowNum + "-" + intHighNum);
+                                }
+                                //there is more than one record returned, compare the data to see if we need to write out anything
+                                if (intRecCount > 1)
+                                {
+                                    //compare the booleans and if one is in range, then don't write out anything to file; aka: assume all is good
+                                    //if (bool1stRecordNotInRange == false | bool2ndRecordNotInRange == false)
+
+                                    //checked the highest and lowest numbers from the streets segments and see is the address fits within the range, if not write it to text file
+                                    if (!(Convert.ToInt32(sqlDR1["HSENO"]) >= intLowNum && Convert.ToInt32(sqlDR1["HSENO"]) <= intHighNum))
+                                    {
+                                        streamWriter.WriteLine(z + "," + sqlDR1["X"] + "," + sqlDR1["Y"] + "," + sqlDR1["OBJECTID"] + "," + "RANGE" + "," + intLowNum + "-" + intHighNum);
+                                    }
+                                }
+
+
+
+                            }
+                            //checking for the nearest street retunred zero records (aka: there are no streets with this name)
+                            else
+                            {
+                                z = z + 1;
+                                streamWriter.WriteLine(z + "," + sqlDR1["X"] + "," + sqlDR1["Y"] + "," + sqlDR1["OBJECTID"] + "," + "NOTFOUND" + "," + "");
+                            }
+                            //close the data reader
+                            sqlDR2.Close();
+
+                        }
+
+                    }
+                    else //could not find an election date for election number
+                    {
+                        Console.WriteLine("The GIS_GetMaxOIDAddress query returned null values with these parameters: " + intBatch + ", " + intTotalRecordSets + ".");
+                        return;
+                    }
+
+
+                    //close the datareader so we can use it again for the next batch
+                    sqlDR1.Close();
+
+                    Console.WriteLine("Finished with address batch " + i + " of " + intTotalRecordSets + " at " + DateTime.Now);
+
+                } //end of the recordset loop
+
+
+
+
+
+
+                //close the stream writer
+                streamWriter.Close();
+
+                //pause so we can read the console
+                Console.ReadLine();
+               
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine("There was an error with the AddressWithNoStreets console application.");
+                Console.ReadLine();
+            }
+            finally
+            {
+                //close out the database connections
+                if (DB != null)
+                {
+                    if (DB.DbConn.State == ConnectionState.Open)
+                    {
+                        DB.CloseConnection();
+                        DB = null;
+                    }
+                }
+                if (DB1 != null)
+                {
+                    if (DB1.DbConn.State == ConnectionState.Open)
+                    {
+                        DB1.CloseConnection();
+                        DB1 = null;
+                    }
+                }
+                if (DB2 != null)
+                {
+                    if (DB2.DbConn.State == ConnectionState.Open)
+                    {
+                        DB2.CloseConnection();
+                        DB2 = null;
+                    }
+                }
+            
+            }
+
+        }
+    }
+}
